@@ -70,12 +70,6 @@ sen_ms$NDVI <- (sen_ms$B08-sen_ms$B04)/(sen_ms$B08+sen_ms$B04)
 plot(sen_ms$NDVI)
 ```
 
-### Add rasters of coordinates (not mandatory...used to show some things later)
-```{r coordinates}
-xy <- crds(sen_ms,na.rm=F)
-sen_ms$lon <- rast(sen_ms[[1]],vals=xy[,1],names="lon")
-sen_ms$lat <- rast(sen_ms[[1]],vals=xy[,2],names="lat")
-```
 
 
 #### Vector data (Response variable)
@@ -96,23 +90,35 @@ viewRGB(as(sen_ms,"Raster"), r = 3, g = 2, b = 1, map.types = "Esri.WorldImagery
 
 #### Extract raster information
 
-In order to train a machine learning model between the spectral properties and the land cover class, we first need to create a data frame that contains the predictor variables at the location of the training sites as well as the corresponding class information. This data frame can be produced with the extract function. The resulting data frame contains the predictor variables for each pixel overlayed by the polygons. This data frame then still needs to be merged with the information on the land cover class from the sf object.
+In order to train a machine learning model between the spectral properties and the land cover class, we first need to create a data frame that contains the predictor variables at the location of the training sites as well as the corresponding class information. This data frame can be produced with the extract function. However, first we randomly select pixels within the polygons, otherwise the training data set would be too large.
 
+```{r samplepoints}
+trainSites$PolygonID <- 1:nrow(trainSites) # lets keep the polygon ID
+samplepoints <- st_sample(trainSites,800)
+samplepoints <- st_intersection(trainSites,samplepoints)
+```
+
+Now we can extract and combine with the attributes from the reference sites.
 ```{r extract}
-extr <- extract(sen_ms, trainSites, na.rm=FALSE)
-trainSites$PolygonID <- 1:nrow(trainSites)
-extr <- merge(extr, trainSites, by.x="ID", by.y="PolygonID")
-head(extr)
+trainDat <- extract(sen_ms, samplepoints, na.rm=FALSE)
+trainDat <- cbind(trainDat, samplepoints)
+head(trainDat)
 ```
 
-In order to speed things up, for this tutorial we will reduce the data. Therefore, from each training polygon only 5% of the pixels will be used for model training.
-Therefore, from each polygon 5% of the pixels are randomly drawn.
 
-```{r subset}
-set.seed(100)
-trainids <- createDataPartition(extr$ID,list=FALSE,p=0.05)
-trainDat <- extr[trainids,]
+### Explore the data
+```{r explore}
+boxplot(NDVI~Label,data=trainDat)
 ```
+
+```{r explore2}
+featurePlot(x = trainDat[, c("B02","B04","B08","NDVI","B11")], 
+            y = factor(trainDat$Label), 
+            plot = "pairs",
+            ## Add a key at the top
+            auto.key = list(columns = 3))
+```
+
 
 ## Basic model training
 ### Predictors and response
@@ -163,7 +169,7 @@ The code shown above was a basic example of how to train a model and do a classi
 Before starting model training we can specify some control settings using trainControl. For hyperparameter tuning (mtry) as well as for error assessment we use a spatial 3-fold cross-validation. Therefore the training data are split into 3 folds but data from the same polygon are always grouped so that they never occur in both, training and testing. Also we make sure that each fold contains data from each land cover class. CAST's CreateSpacetimeFolds is doing this job when we specify the polygon ID and the class label.
 
 ```{r trainctrl, warning=FALSE, message=FALSE}
-indices <- CreateSpacetimeFolds(trainDat,spacevar = "ID",k=3,class="Label")
+indices <- CreateSpacetimeFolds(trainDat,spacevar = "PolygonID",k=3,class="Label")
 ctrl <- trainControl(method="cv", 
                      index = indices$index,
                      savePredictions = TRUE)
@@ -171,8 +177,7 @@ ctrl <- trainControl(method="cv",
 
 We can visualize the "representativness" of the CV folds with plot_geodist:
 ```{r plotgeodist, warning=FALSE, message=FALSE, results='hide'}
-traindat_sf <- st_as_sf(trainDat[,-(ncol(trainDat))],coords = c("lon","lat"),crs=crs(sen_ms))
-geodist <- plot_geodist(traindat_sf,sen_ms,
+geodist <- plot_geodist(samplepoints,sen_ms,
               cvfolds = indices$indexOut,
              cvtrain = indices$index)
 
@@ -180,13 +185,25 @@ geodist <- plot_geodist(traindat_sf,sen_ms,
 
 See how it compares to a random CV:
 ```{r plotgeodist_random, warning=FALSE, message=FALSE, results='hide'}
-randomfolds <- createFolds(trainDat$ClassID, k = 3, list = TRUE, returnTrain = FALSE)
+randomfolds <- createFolds(samplepoints$ClassID, k = 3, list = TRUE, returnTrain = FALSE)
 
-geodist <- plot_geodist(traindat_sf,sen_ms,
+geodist <- plot_geodist(samplepoints,sen_ms,
               cvfolds = randomfolds)
 ```
 
+We can also explore how it would look like using NNDM
+```{r plotgeodist_nndm, warning=FALSE, message=FALSE, results='hide'}
+# Define the modeldomain (here the extent of the satellite image)
+modeldomain <- st_as_sf(st_as_sfc(st_bbox(sen_ms)))
+modeldomain <- st_transform(modeldomain,st_crs(samplepoints))
 
+#Define folds:
+nndmfolds <- knndm(samplepoints,modeldomain=modeldomain)
+
+#plot
+geodist <- plot_geodist(samplepoints,sen_ms,
+                        cvfolds = nndmfolds$indx_test)
+```
 
 
 #### Spatial variable selection
@@ -277,4 +294,4 @@ We see that the model can be applied to most parts of Münster, however there ar
 
 
 ### Get further help
-For further help on handling of raster and vector data in R see e.g. https://geocompr.github.io/. More information on the relevance of spatial validation strategies as well on the AOA can be found in recordings from OpenGeoHub (https://www.uni-muenster.de/RemoteSensing/lehre/summer_schools/) or in the Tutorials of the CAST package: https://hannameyer.github.io/CAST/
+For further help on handling of raster and vector data in R see e.g. https://geocompr.github.io/. More information on machine learning: e.g. https://link.springer.com/book/10.1007/978-1-4614-6849-3. More information on the relevance of spatial validation strategies as well on the AOA can be found in recordings from OpenGeoHub (https://www.uni-muenster.de/RemoteSensing/lehre/summer_schools/) or in the Tutorials of the CAST package: https://hannameyer.github.io/CAST/
