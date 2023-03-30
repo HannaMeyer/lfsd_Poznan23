@@ -84,7 +84,8 @@ print(trainSites)
 Using mapview's viewRGB function we can visualize the aerial image channels as true color composite in the geographical context and overlay it with the polygons. Click on the polygons to see which land cover class is assigned to a respective polygon.
 
 ```{r visMV, warning=FALSE, message= FALSE}
-viewRGB(as(sen_ms,"Raster"), r = 3, g = 2, b = 1, map.types = "Esri.WorldImagery")+
+sen_ms_raster <- as(sen_ms,"Raster")
+viewRGB(sen_ms_raster, r = 3, g = 2, b = 1, map.types = "Esri.WorldImagery")+
   mapview(trainSites)
 ```
 
@@ -96,10 +97,14 @@ In order to train a machine learning model between the spectral properties and t
 trainSites$PolygonID <- 1:nrow(trainSites) # lets keep the polygon ID
 samplepoints <- st_sample(trainSites,800)
 samplepoints <- st_intersection(trainSites,samplepoints)
+mapview(samplepoints)
 ```
 
 Now we can extract and combine with the attributes from the reference sites.
 ```{r extract}
+
+#samplepoints <- st_transform(samplepoints,st_crs(sen_ms))
+
 trainDat <- extract(sen_ms, samplepoints, na.rm=FALSE)
 trainDat <- cbind(trainDat, samplepoints)
 head(trainDat)
